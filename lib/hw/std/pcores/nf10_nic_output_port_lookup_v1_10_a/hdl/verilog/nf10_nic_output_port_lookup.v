@@ -119,7 +119,6 @@ module nf10_nic_output_port_lookup
 
 
 reg [31:0] ethertype;
-reg [15:0] ETH_TYPE;
 reg [31:0] dst_MAC2;
 reg [31:0] dst_MAC;
 reg search_req;
@@ -298,6 +297,7 @@ assign search_req_w = (word_IP_DST_HI=='b1)? 'b1:'b0;
 
 reg gate;
 wire gate_rw;// checking the logic for gate
+reg [31:0] clkdiv;
 
 always @(posedge axi_aclk) begin//{
 
@@ -308,7 +308,8 @@ if(~axi_resetn) begin//{
 
 // us_counter_enable= 'b1 should be triggered by state machine.
 
-else if(US_COUNTER <= transmission_window) begin//{
+//else if(US_COUNTER <= transmission_window) begin//{
+else if(clkdiv <= transmission_window) begin//{
                 gate <= 'b1;
 //		us_counter_enable <= 'b1;
                 end//}
@@ -334,6 +335,7 @@ end//}
       lpi_enable='b0;
       wake_enable='b0;
       inactive = 'b0;
+      request_counter_enable ='b0;
 	
       case(state)//{
 /*    TBW  : 
@@ -346,7 +348,7 @@ end//}
 			else
 				state_next = TBW;
                  end//}*/
-    FIRST: begin//{
+    FIRST:if(gate) begin//{
 	    inactive=1;
 	    //us_counter_enable= 'b1;
             m_axis_tvalid = 'b1;
@@ -359,6 +361,8 @@ end//}
                             state_next = SECOND;
                         end//} 
                 end//}
+	    else
+		state_next = HEADER;		
 
         SECOND: begin//{
 			inactive=1;
@@ -368,7 +372,7 @@ end//}
                 m_axis_tuser[DST_PORT_POS+7:DST_PORT_POS] = 8'b100;
                 m_axis_tlast = 1;
                 if(m_axis_tlast & m_axis_tvalid & m_axis_tready) begin//{
-                           state_next = HEADER;
+                           state_next = FIRST;
 		//	   us_counter_enable= 'b0;  is to be done by the counter.
 			   request_counter_enable = 'b1;
                          end//}
@@ -418,7 +422,8 @@ end//}
 		end//}
 
         //HEADER: if(/*~us_enable*/ gate /*&& (US_COUNTER = transmission_window)*/) begin//{
-        HEADER: if(/*(us_enable=='b0)&&*/(gate_rw=='b0)) begin//{
+        //HEADER: if(/*(us_enable=='b0)&&*/(gate=='b0)) begin//{
+        HEADER: begin//{
 			inactive = 0;
 			m_axis_tvalid = fm_axis_tvalid;
 		        m_axis_tdata = fm_axis_tdata;
@@ -429,25 +434,25 @@ end//}
                             state_next = DATA;
                         end//}
                 end//}
-                else  begin//{
-			  state_next= FIRST;
-			end//}
+        //        else  begin//{
+	//		  state_next= FIRST;
+	//		end//}
 
         DATA: begin//{
 		   inactive=0;
 	           if(m_axis_tlast & m_axis_tvalid & m_axis_tready) begin//{
-        	      state_next = HEADER;
+        	      state_next = FIRST;
           		 end//}
         	end//}
 	
-	default: state_next = HEADER;
+	default: state_next = FIRST;
 
       endcase //} case (state)
    end //} always @ (*)
 
    always @(posedge axi_aclk) begin
       if(~axi_resetn) begin
-         state <= HEADER;
+         state <= FIRST;
       end
       else begin
          state <= state_next;
@@ -562,25 +567,37 @@ assign rst_cntrs = rw_regs[31:0];
 //assign us_enable = rw_regs[(C_S_AXI_DATA_WIDTH*1)+1-1:(C_S_AXI_DATA_WIDTH*1)];
 assign transmission_window = rw_regs[63:32];
 assign gate_rw = rw_regs[95:64];
-reg  [C_S_AXI_DATA_WIDTH-1 : 0] stamper;
+reg  [31: 0] stamper;
 //remember to change the number of RO REGS
-assign ro_regs = {request_counter, US_COUNTER, gate, dst_MAC2, dst_MAC, ethertype, stamper};
+assign ro_regs = {request_counter, gate, dst_MAC2, dst_MAC, ethertype, clkdiv, stamper};
 
 // LUT hit/miss counters
   always @ (posedge axi_aclk) begin
     if (~axi_resetn) begin
-          stamper  <= {C_S_AXI_DATA_WIDTH{1'b0}};
-	  request_counter <= 'b0;
+          stamper  <= 32'b0;
+	  //request_counter <= 'b0;
         end
         else if (rst_cntrs) begin
-          stamper  <= {C_S_AXI_DATA_WIDTH{1'b0}};
-	  request_counter <= 'b0;
+          stamper  <= 32'b0;
+	  //request_counter <= 'b0;
         end
-	else if (request_counter_enable)
-		request_counter <= request_counter +'b1;
+	//else if (request_counter_enable)
+	//	request_counter <= request_counter +'b1;
         else begin
            stamper  <= stamper + 1;
         end
   end
+  
+  always @(posedge axi_aclk) begin//{
+	if(~axi_resetn)
+		clkdiv <= 32'b0;
+         else if (rst_cntrs) 
+        	clkdiv  <= 32'b0;
+	 else if (stamper == 32'hffffffff)
+	  	clkdiv <= clkdiv+ 'b1;
+	end//}
+
+
+
 
 endmodule // output_port_lookup
